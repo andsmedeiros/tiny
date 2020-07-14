@@ -14,6 +14,7 @@
 struct tiny_max_align{ char c; TINY_ALIGNMENT align; };
 #else
 // Alignment is automatically calculated (requires max_align_t)
+#define TINY_ALIGNMENT max_align_t
 struct tiny_max_align{ char c; max_align_t align; };
 #endif
 enum { ALIGNMENT = offsetof(struct tiny_max_align, align) };
@@ -47,7 +48,7 @@ static union tiny_aligned_buffer {
     union tiny_padded_size buffer; 
 
     // Aligns the buffer to the boundary defined by alignof(TINY_ALIGN)
-    max_align_t align;
+    TINY_ALIGNMENT align;
 } tiny_buffer = { {
     { (size_t)(TINY_BUFFER / ALIGNMENT - 2 * HEADER_BLOCKS) },
     { { 0 } },
@@ -82,12 +83,12 @@ static const char * const operations[] = {
 };
 
 // Describes a section of the buffer that may or may not be taken
-typedef struct tiny_section {
+typedef struct tiny_block_section {
     bool taken; // Marks if this section is currently in use by the programmer
     size_t size; // Specifies how many blocks are there in this section
     tiny_block *header; // The address of the section header
     void *data; // The address of the section data
-} tiny_section;
+} tiny_block_section;
 
 // The main library context
 static struct tiny {
@@ -103,9 +104,9 @@ static void write_header(tiny_block *header, size_t size, bool taken) {
 }
 
 // Parses a header and returns the parsed information
-static tiny_section read_header(tiny_block *header) {
+static tiny_block_section read_header(tiny_block *header) {
     size_t header_value = *(size_t *)header;
-    tiny_section section = { 
+    tiny_block_section section = { 
         header_value & TAKEN_BIT,
         header_value & ~TAKEN_BIT,
         header,
@@ -117,7 +118,7 @@ static tiny_section read_header(tiny_block *header) {
 // Alocates some blocks of memory in the provided section.
 // If the section is bigger than necessary, it may be split and a new section
 // with the remaining space may be created.
-static void allocate_at(tiny_section section, size_t block_count) {
+static void allocate_at(tiny_block_section section, size_t block_count) {
     size_t remaining_space = 
         section.size - block_count - HEADER_BLOCKS;
 
@@ -135,7 +136,7 @@ static void allocate_at(tiny_section section, size_t block_count) {
 
 // Returns the address of the next section
 static tiny_block *next_section(tiny_block *header) {
-    tiny_section info = read_header(header);
+    tiny_block_section info = read_header(header);
     return header + info.size + 1;
 }
 
@@ -183,7 +184,7 @@ void tiny_inspect() {
     }
 
     tiny_block *header = &tiny.buffer[0];
-    tiny_section info = read_header(header);
+    tiny_block_section info = read_header(header);
     while(info.size > 0) {
         printf(
             "%s section with %lu blocks (%lu bytes) at [%p]; data starts at [%p]\n", 
@@ -204,6 +205,16 @@ void tiny_clear() {
     tiny.buffer = NULL;
     tiny.size = 0;
     store_operation(TINY_CLEAR, true, 0);
+}
+
+// Resets the library buffer to its initial value
+void tiny_reset() {
+    #ifdef TINY_BUFFER
+    tiny.buffer = (tiny_block *)&tiny_buffer.buffer;
+    tiny.size = (TINY_BUFFER / ALIGNMENT - 2 * HEADER_BLOCKS);
+    #else
+    tiny_clear();
+    #endif
 }
 
 // Sets the out-of-memory flag status. If set, calls to `malloc` and similar will
@@ -228,7 +239,7 @@ void *tiny_malloc(size_t size) {
 
     size_t blocks_required = ALIGN_SIZE(size) / ALIGNMENT;
     tiny_block *header = &tiny.buffer[0];
-    tiny_section section = read_header(header);
+    tiny_block_section section = read_header(header);
     while(section.size > 0) {
         if(!section.taken && section.size >= blocks_required + HEADER_BLOCKS) {
             allocate_at(section, blocks_required);
@@ -255,9 +266,9 @@ void *tiny_realloc(void *ptr, size_t size) {
 
     size_t blocks_required = ALIGN_SIZE(size) / ALIGNMENT;
     tiny_block *header = (tiny_block *)ptr - 1;
-    tiny_section section = read_header(header);
+    tiny_block_section section = read_header(header);
     tiny_block *next = next_section(header);
-    tiny_section next_section = read_header(next);
+    tiny_block_section next_section = read_header(next);
 
     if(!next_section.taken && next_section.size >= blocks_required - section.size + HEADER_BLOCKS) {
         write_header(header, section.size + next_section.size + HEADER_BLOCKS, true);
@@ -296,15 +307,15 @@ void tiny_free(void *ptr) {
     }
 
     tiny_block *current = (tiny_block *)ptr - 1;
-    tiny_section current_section = read_header(current);
+    tiny_block_section current_section = read_header(current);
     write_header(current, current_section.size, false);
 
     tiny_block *header = &tiny.buffer[0];
-    tiny_section section = read_header(header);
+    tiny_block_section section = read_header(header);
     while(section.size > 0) {
         tiny_block *next = next_section(header);
         if(!section.taken) {
-            tiny_section next_section = read_header(next);
+            tiny_block_section next_section = read_header(next);
             if(!next_section.taken) {
                 write_header(header, section.size + next_section.size + HEADER_BLOCKS, false);
                 section = read_header(header);
