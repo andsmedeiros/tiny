@@ -11,6 +11,7 @@ void *realloc(void *ptr, size_t size) {
 void *calloc(size_t num, size_t size) {
     return tiny_calloc(num, size);
 }
+
 void free(void *ptr) {
     tiny_free(ptr);
 }
