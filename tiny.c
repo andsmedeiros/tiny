@@ -19,6 +19,10 @@ struct tiny_max_align{ char c; max_align_t align; };
 #endif
 enum { ALIGNMENT = offsetof(struct tiny_max_align, align) };
 
+#define EXPAND1(X) #X
+#define EXPAND2(X) EXPAND1(X)
+#define ALIGNED_TYPE EXPAND2(TINY_ALIGNMENT)
+
 // Defines how many blocks a size_t takes 
 enum { HEADER_BLOCKS = ALIGN_SIZE(sizeof(size_t)) / ALIGNMENT };
 
@@ -76,6 +80,7 @@ static const char * const operations[] = {
     "TINY_LOAD",
     "TINY_INIT",
     "TINY_CLEAR",
+    "TINY_RESET",
     "TINY_MALLOC",
     "TINY_REALLOC",
     "TINY_CALLOC",
@@ -110,7 +115,7 @@ static tiny_block_section read_header(tiny_block *header) {
         header_value & TAKEN_BIT,
         header_value & ~TAKEN_BIT,
         header,
-        (void *)(header + 1) 
+        (void *)(header + HEADER_BLOCKS) 
     };
     return section;
 }
@@ -120,15 +125,15 @@ static tiny_block_section read_header(tiny_block *header) {
 // with the remaining space may be created.
 static void allocate_at(tiny_block_section section, size_t block_count) {
     size_t remaining_space = 
-        section.size - block_count - HEADER_BLOCKS;
+        section.size - block_count;
 
-    if(remaining_space <= 1) {
-        write_header(section.header, block_count + remaining_space, true);
+    if(remaining_space <= HEADER_BLOCKS) {
+        write_header(section.header, section.size, true);
     } else {
         write_header(section.header, block_count, true);
         write_header(
-            section.header + block_count + 1, 
-            remaining_space, 
+            section.header + block_count + HEADER_BLOCKS, 
+            remaining_space - HEADER_BLOCKS, 
             false
         );
     }
@@ -137,7 +142,7 @@ static void allocate_at(tiny_block_section section, size_t block_count) {
 // Returns the address of the next section
 static tiny_block *next_section(tiny_block *header) {
     tiny_block_section info = read_header(header);
-    return header + info.size + 1;
+    return header + info.size + HEADER_BLOCKS;
 }
 
 // Stores the last operation performed by the library into the main context
@@ -153,7 +158,7 @@ void tiny_init(unsigned char *buffer, size_t size) {
     unsigned char *aligned = ALIGN_PTR(buffer); 
     size_t lost_alignment = aligned - buffer;
 
-    if(lost_alignment + 2 * HEADER_BLOCKS * ALIGNMENT >= size) {
+    if(lost_alignment + (2 * HEADER_BLOCKS + 1) * ALIGNMENT >= size) {
         store_operation(TINY_INIT, false, size);
         return;
     } 
@@ -162,42 +167,8 @@ void tiny_init(unsigned char *buffer, size_t size) {
     tiny.size = (size - lost_alignment) / ALIGNMENT - 2 * HEADER_BLOCKS;
 
     write_header(&tiny.buffer[0], tiny.size, false);
-    write_header(&tiny.buffer[tiny.size + 1], 0, true);
+    write_header(&tiny.buffer[tiny.size + HEADER_BLOCKS], 0, true);
     store_operation(TINY_INIT, true, size);
-}
-
-// Prints a summary of the library
-void tiny_inspect() {
-    printf(
-        "\nLast tiny operation: %s\n"
-        "status: %s; size: %lu\n", 
-        operations[tiny.last_operation.function], 
-        tiny.last_operation.success ? "success" : "failure",
-        tiny.last_operation.size
-    );
-
-    printf("Inspecting heap\n");
-
-    if(tiny.buffer == NULL || tiny.size == 0) {
-        printf("Heap not allocated.\n");
-        return;
-    }
-
-    tiny_block *header = &tiny.buffer[0];
-    tiny_block_section info = read_header(header);
-    while(info.size > 0) {
-        printf(
-            "%s section with %lu blocks (%lu bytes) at [%p]; data starts at [%p]\n", 
-            info.taken ? "Taken" : "Free",
-            info.size,
-            info.size * ALIGNMENT,
-            (void *)info.header,
-            info.data
-        );
-        header = next_section(header);
-        info = read_header(header);
-    } 
-    printf("No more blocks to inspect\n");
 }
 
 // Clears the library buffer
@@ -213,8 +184,10 @@ void tiny_reset() {
     tiny.buffer = (tiny_block *)&tiny_buffer.buffer;
     tiny.size = (TINY_BUFFER / ALIGNMENT - 2 * HEADER_BLOCKS);
     #else
-    tiny_clear();
+    tiny.buffer = NULL;
+    tiny.size = 0;
     #endif
+    store_operation(TINY_RESET, true, tiny.size);
 }
 
 // Sets the out-of-memory flag status. If set, calls to `malloc` and similar will
@@ -231,17 +204,160 @@ tiny_operation tiny_last_operation() {
 // Gets the size of each block in the buffer (also, the library alignment)
 size_t tiny_block_size() { return ALIGNMENT; }
 
+
+// Prints a summary of the library
+void tiny_print(bool summary, bool last_op, bool heap) {
+    printf("\n");
+    if(summary) {
+        tiny_summary summ = tiny_inspect();
+        printf(
+            "\n|  Tiny summary  |\n\n"
+            "Alignment: %lu\n"
+            "Alignment type alias: %s\n"
+            "Static buffer: [%p]\n"
+            "Static buffer size: %lu\n"
+            "Forced out-of-memory: %s\n"
+            "Buffer: [%p]\n"
+            "Buffer size: %lu blocks (%lu bytes)\n"
+            "Free memory: %lu blocks (%lu bytes)\n"
+            "Taken memory: %lu blocks (%lu bytes)\n"
+            "Sections: %lu in total, %lu free, %lu taken\n",
+            summ.alignment,
+            summ.aligned_type,
+            summ.static_buffer,
+            summ.static_buffer_size,
+            summ.out_of_memory ? "yes" : "no",
+            summ.buffer,
+            summ.total.blocks, summ.total.bytes,
+            summ.free.blocks, summ.free.bytes,
+            summ.taken.blocks, summ.taken.bytes,
+            summ.sections.total, summ.sections.free, summ.sections.taken
+        );
+    }
+
+    if(last_op) {
+        printf(
+            "\n|  Last tiny operation  |\n\n"
+            "Operation: %s\n"
+            "Status: %s\n"
+            "Size: %lu\n", 
+            operations[tiny.last_operation.function], 
+            tiny.last_operation.success ? "success" : "failure",
+            tiny.last_operation.size
+        );
+    }
+
+    if(heap) {
+        printf("\n|  Tiny heap  |\n\n");
+        if(tiny.buffer == NULL || tiny.size == 0) {
+            printf("Heap not allocated\n");
+        } else {
+            tiny_block *header = &tiny.buffer[0];
+            tiny_block_section info = read_header(header);
+            size_t i = 0;
+            while(info.size > 0) {
+                printf(
+                    "Section %lu:\n"
+                    "    Taken: %s\n"
+                    "    Size: %lu blocks (%lu bytes)\n"
+                    "    Header adddress: [%p]\n"
+                    "    Data address: [%p]\n",
+                    i++,
+                    info.taken ? "yes" : "no",
+                    info.size, info.size * ALIGNMENT,
+                    (void *)info.header,
+                    info.data
+                );
+                header = next_section(header);
+                info = read_header(header);
+            } 
+            printf("No more sections\n");
+        }
+    }
+}
+
+
+tiny_summary tiny_inspect() {
+    #ifdef TINY_BUFFER 
+    void *static_buffer = (void *)&tiny_buffer;
+    size_t static_buffer_size = TINY_BUFFER;
+    #else
+    void *static_buffer = NULL;
+    size_t static_buffer_size = 0;
+    #endif
+
+    size_t free_blocks = 0, taken_blocks = 0;
+    size_t total_sections = 0, free_sections = 0, taken_sections = 0;
+
+    tiny_block *header = &tiny.buffer[0];
+    if(header) {
+        tiny_block_section section = read_header(header);
+        while(section.size > 0) {
+            total_sections++;
+            if(section.taken) {
+                taken_sections++;
+                taken_blocks += section.size;
+            } else {
+                free_sections++;
+                free_blocks += section.size;
+            }
+            header = next_section(header);
+            section = read_header(header);
+        }
+    }
+
+    tiny_summary summ = {
+        ALIGNMENT,
+        ALIGNED_TYPE,
+        static_buffer,
+        static_buffer_size,
+        tiny.out_of_memory,
+        tiny.buffer,
+        { tiny.size, tiny.size * ALIGNMENT },
+        { free_blocks, free_blocks * ALIGNMENT },
+        { taken_blocks, taken_blocks * ALIGNMENT },
+        { total_sections, free_sections, taken_sections }
+    };
+    return summ;
+}
+
+
+tiny_section tiny_next_section(void *previous_header) {
+    if(tiny.buffer == NULL) {
+        tiny_section info = { false, NULL, NULL, { 0, 0 } };
+        return info;    
+    }
+
+    tiny_block *header = previous_header ? 
+        next_section(previous_header) : 
+        &tiny.buffer[0];
+    tiny_block_section section = read_header(header);
+    tiny_section info = {
+        section.taken,
+        section.size != 0 ? (void *)header : NULL,
+        section.size != 0 ? (void *)(header + HEADER_BLOCKS) : NULL,
+        { section.size, section.size * ALIGNMENT }
+    };
+    return info;
+}
+
 void *tiny_malloc(size_t size) {
     if(tiny.out_of_memory || tiny.buffer == NULL || size == 0) {
         store_operation(TINY_MALLOC, false, size);
         return NULL;
     }
+    
+    size_t aligned_size = ALIGN_SIZE(size);
+    if(aligned_size < size) {
+        store_operation(TINY_MALLOC, false, size);
+        return NULL;
+    }
 
-    size_t blocks_required = ALIGN_SIZE(size) / ALIGNMENT;
+    size_t blocks_required = aligned_size / ALIGNMENT;
     tiny_block *header = &tiny.buffer[0];
     tiny_block_section section = read_header(header);
     while(section.size > 0) {
-        if(!section.taken && section.size >= blocks_required + HEADER_BLOCKS) {
+        if(!section.taken && section.size >= blocks_required) {
             allocate_at(section, blocks_required);
             store_operation(TINY_MALLOC, true, size);
             return section.data;
@@ -265,7 +381,7 @@ void *tiny_realloc(void *ptr, size_t size) {
     }
 
     size_t blocks_required = ALIGN_SIZE(size) / ALIGNMENT;
-    tiny_block *header = (tiny_block *)ptr - 1;
+    tiny_block *header = (tiny_block *)ptr - HEADER_BLOCKS;
     tiny_block_section section = read_header(header);
     tiny_block *next = next_section(header);
     tiny_block_section next_section = read_header(next);
@@ -294,7 +410,7 @@ void *tiny_calloc(size_t num, size_t size) {
     }
     void *data = tiny_malloc(full_size);
     if(data != NULL) {
-        memset(data, 0, size);
+        memset(data, 0, full_size);
     }
     store_operation(TINY_CALLOC, data != NULL, num * size);
     return data;
@@ -306,7 +422,7 @@ void tiny_free(void *ptr) {
         return;
     }
 
-    tiny_block *current = (tiny_block *)ptr - 1;
+    tiny_block *current = (tiny_block *)ptr - HEADER_BLOCKS;
     tiny_block_section current_section = read_header(current);
     write_header(current, current_section.size, false);
 
