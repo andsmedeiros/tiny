@@ -152,7 +152,7 @@ static void store_operation(enum tiny_function function, bool success, size_t si
 }
 
 // Initialises the library with a buffer.
-// This will partition the buffer accordingly and make start allocating and
+// This will partition the buffer accordingly and allow allocating and
 // deallocating memory from it.
 void tiny_init(unsigned char *buffer, size_t size) {
     unsigned char *aligned = ALIGN_PTR(buffer); 
