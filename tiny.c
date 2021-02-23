@@ -120,7 +120,7 @@ static tiny_block_section read_header(tiny_block *header) {
     return section;
 }
 
-// Alocates some blocks of memory in the provided section.
+// Allocates some blocks of memory in the provided section.
 // If the section is bigger than necessary, it may be split and a new section
 // with the remaining space may be created.
 static void allocate_at(tiny_block_section section, size_t block_count) {
@@ -152,7 +152,7 @@ static void store_operation(enum tiny_function function, bool success, size_t si
 }
 
 // Initialises the library with a buffer.
-// This will partition the buffer accordingly and make start allocating and
+// This will partition the buffer accordingly and allow allocating and
 // deallocating memory from it.
 void tiny_init(unsigned char *buffer, size_t size) {
     unsigned char *aligned = ALIGN_PTR(buffer); 
@@ -196,7 +196,7 @@ void tiny_out_of_memory(bool out_of_memory) {
     tiny.out_of_memory = out_of_memory;
 }
 
-// Retuns the last operation performed by the library.
+// Returns the last operation performed by the library.
 tiny_operation tiny_last_operation() {
     return tiny.last_operation;
 }
