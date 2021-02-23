@@ -196,7 +196,7 @@ void tiny_out_of_memory(bool out_of_memory) {
     tiny.out_of_memory = out_of_memory;
 }
 
-// Retuns the last operation performed by the library.
+// Returns the last operation performed by the library.
 tiny_operation tiny_last_operation() {
     return tiny.last_operation;
 }
