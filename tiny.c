@@ -120,7 +120,7 @@ static tiny_block_section read_header(tiny_block *header) {
     return section;
 }
 
-// Alocates some blocks of memory in the provided section.
+// Allocates some blocks of memory in the provided section.
 // If the section is bigger than necessary, it may be split and a new section
 // with the remaining space may be created.
 static void allocate_at(tiny_block_section section, size_t block_count) {
